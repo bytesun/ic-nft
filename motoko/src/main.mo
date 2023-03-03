@@ -23,14 +23,16 @@ import Time "mo:base/Time";
 import TrieSet "mo:base/TrieSet";
 
 import Types "./types";
+import Http "./http";
+import HttpTypes "./http/types";
 
-shared(msg) actor class NFToken(
-    _logo: Text,
-    _name: Text, 
-    _symbol: Text,
-    _desc: Text,
-    _owner: Principal
-    ) = this {
+shared (msg) actor class NFToken(
+    _logo : Text,
+    _name : Text,
+    _symbol : Text,
+    _desc : Text,
+    _owner : Principal,
+) = this {
 
     type Metadata = Types.Metadata;
     type Location = Types.Location;
@@ -52,36 +54,40 @@ shared(msg) actor class NFToken(
     // to be compatible with Rust canister
     // in Rust, Result is `Ok` and `Err`
     public type TxReceipt = {
-        #Ok: Nat;
-        #Err: Errors;
+        #Ok : Nat;
+        #Err : Errors;
     };
     public type MintResult = {
-        #Ok: (Nat, Nat);
-        #Err: Errors;
+        #Ok : (Nat, Nat);
+        #Err : Errors;
     };
 
-    public type Result<Ok, Err> = {#ok : Ok; #err : Err};
+    public type Result<Ok, Err> = { #ok : Ok; #err : Err };
 
     private stable var logo_ : Text = _logo; // base64 encoded image
     private stable var name_ : Text = _name;
     private stable var symbol_ : Text = _symbol;
     private stable var desc_ : Text = _desc;
-    private stable var owner_: Principal = _owner;
-    private stable var totalSupply_: Nat = 0;
-    private stable var blackhole: Principal = Principal.fromText("aaaaa-aa");
+    private stable var owner_ : Principal = _owner;
+    private stable var totalSupply_ : Nat = 0;
+    private stable var blackhole : Principal = Principal.fromText("aaaaa-aa");
 
     private stable var tokensEntries : [(Nat, TokenInfo)] = [];
     private stable var usersEntries : [(Principal, UserInfo)] = [];
     private var tokens = HashMap.HashMap<Nat, TokenInfo>(1, Nat.equal, Hash.hash);
     private var users = HashMap.HashMap<Principal, UserInfo>(1, Principal.equal, Principal.hash);
-    private stable var txs: [TxRecord] = [];
-    private stable var txIndex: Nat = 0;
+    private stable var txs : [TxRecord] = [];
+    private stable var txIndex : Nat = 0;
 
     private func addTxRecord(
-        caller: Principal, op: Operation, tokenIndex: ?Nat,
-        from: Record, to: Record, timestamp: Time.Time
-    ): Nat {
-        let record: TxRecord = {
+        caller : Principal,
+        op : Operation,
+        tokenIndex : ?Nat,
+        from : Record,
+        to : Record,
+        timestamp : Time.Time,
+    ) : Nat {
+        let record : TxRecord = {
             caller = caller;
             op = op;
             index = txIndex;
@@ -90,50 +96,52 @@ shared(msg) actor class NFToken(
             to = to;
             timestamp = timestamp;
         };
-        txs := Array.append(txs, [record]);
+
+        let b = Buffer.fromArray<TxRecord>(txs);
+        b.add(record);
+        txs := Buffer.toArray(b); // Array.append(txs, [record]);
         txIndex += 1;
         return txIndex - 1;
     };
 
-    private func _unwrap<T>(x : ?T) : T =
-    switch x {
-      case null { Prelude.unreachable() };
-      case (?x_) { x_ };
-    };
-    
-    private func _exists(tokenId: Nat) : Bool {
-        switch (tokens.get(tokenId)) {
-            case (?info) { return true; };
-            case _ { return false; };
-        }
+    private func _unwrap<T>(x : ?T) : T = switch x {
+        case null { Prelude.unreachable() };
+        case (?x_) { x_ };
     };
 
-    private func _ownerOf(tokenId: Nat) : ?Principal {
+    private func _exists(tokenId : Nat) : Bool {
         switch (tokens.get(tokenId)) {
-            case (?info) { return ?info.owner; };
-            case (_) { return null; };
-        }
-    };
-
-    private func _isOwner(who: Principal, tokenId: Nat) : Bool {
-        switch (tokens.get(tokenId)) {
-            case (?info) { return info.owner == who; };
-            case _ { return false; };
+            case (?info) { return true };
+            case _ { return false };
         };
     };
 
-    private func _isApproved(who: Principal, tokenId: Nat) : Bool {
+    private func _ownerOf(tokenId : Nat) : ?Principal {
         switch (tokens.get(tokenId)) {
-            case (?info) { return info.operator == ?who; };
-            case _ { return false; };
-        }
+            case (?info) { return ?info.owner };
+            case (_) { return null };
+        };
     };
-    
-    private func _balanceOf(who: Principal) : Nat {
+
+    private func _isOwner(who : Principal, tokenId : Nat) : Bool {
+        switch (tokens.get(tokenId)) {
+            case (?info) { return info.owner == who };
+            case _ { return false };
+        };
+    };
+
+    private func _isApproved(who : Principal, tokenId : Nat) : Bool {
+        switch (tokens.get(tokenId)) {
+            case (?info) { return info.operator == ?who };
+            case _ { return false };
+        };
+    };
+
+    private func _balanceOf(who : Principal) : Nat {
         switch (users.get(who)) {
-            case (?user) { return TrieSet.size(user.tokens); };
-            case (_) { return 0; };
-        }
+            case (?user) { return TrieSet.size(user.tokens) };
+            case (_) { return 0 };
+        };
     };
 
     private func _newUser() : UserInfo {
@@ -142,10 +150,10 @@ shared(msg) actor class NFToken(
             var allowedBy = TrieSet.empty<Principal>();
             var allowedTokens = TrieSet.empty<Nat>();
             var tokens = TrieSet.empty<Nat>();
-        }
+        };
     };
 
-    private func _tokenInfotoExt(info: TokenInfo) : TokenInfoExt {
+    private func _tokenInfotoExt(info : TokenInfo) : TokenInfoExt {
         return {
             index = info.index;
             owner = info.owner;
@@ -155,7 +163,7 @@ shared(msg) actor class NFToken(
         };
     };
 
-    private func _userInfotoExt(info: UserInfo) : UserInfoExt {
+    private func _userInfotoExt(info : UserInfo) : UserInfoExt {
         return {
             operators = TrieSet.toArray(info.operators);
             allowedBy = TrieSet.toArray(info.allowedBy);
@@ -164,7 +172,7 @@ shared(msg) actor class NFToken(
         };
     };
 
-    private func _isApprovedOrOwner(spender: Principal, tokenId: Nat) : Bool {
+    private func _isApprovedOrOwner(spender : Principal, tokenId : Nat) : Bool {
         switch (_ownerOf(tokenId)) {
             case (?owner) {
                 return spender == owner or _isApproved(spender, tokenId) or _isApprovedForAll(owner, spender);
@@ -172,10 +180,10 @@ shared(msg) actor class NFToken(
             case _ {
                 return false;
             };
-        };        
+        };
     };
 
-    private func _getApproved(tokenId: Nat) : ?Principal {
+    private func _getApproved(tokenId : Nat) : ?Principal {
         switch (tokens.get(tokenId)) {
             case (?info) {
                 return info.operator;
@@ -183,20 +191,20 @@ shared(msg) actor class NFToken(
             case (_) {
                 return null;
             };
-        }
+        };
     };
 
-    private func _isApprovedForAll(owner: Principal, operator: Principal) : Bool {
+    private func _isApprovedForAll(owner : Principal, operator : Principal) : Bool {
         switch (users.get(owner)) {
             case (?user) {
                 return TrieSet.mem(user.operators, operator, Principal.hash(operator), Principal.equal);
             };
-            case _ { return false; };
+            case _ { return false };
         };
     };
 
-    private func _addTokenTo(to: Principal, tokenId: Nat) {
-        switch(users.get(to)) {
+    private func _addTokenTo(to : Principal, tokenId : Nat) {
+        switch (users.get(to)) {
             case (?user) {
                 user.tokens := TrieSet.put(user.tokens, tokenId, Hash.hash(tokenId), Nat.equal);
                 users.put(to, user);
@@ -206,24 +214,24 @@ shared(msg) actor class NFToken(
                 user.tokens := TrieSet.put(user.tokens, tokenId, Hash.hash(tokenId), Nat.equal);
                 users.put(to, user);
             };
-        }
-    }; 
+        };
+    };
 
-    private func _removeTokenFrom(owner: Principal, tokenId: Nat) {
-        assert(_exists(tokenId) and _isOwner(owner, tokenId));
-        switch(users.get(owner)) {
+    private func _removeTokenFrom(owner : Principal, tokenId : Nat) {
+        assert (_exists(tokenId) and _isOwner(owner, tokenId));
+        switch (users.get(owner)) {
             case (?user) {
                 user.tokens := TrieSet.delete(user.tokens, tokenId, Hash.hash(tokenId), Nat.equal);
                 users.put(owner, user);
             };
             case _ {
-                assert(false);
+                assert (false);
             };
-        }
+        };
     };
-   
-    private func _clearApproval(owner: Principal, tokenId: Nat) {
-        assert(_exists(tokenId) and _isOwner(owner, tokenId));
+
+    private func _clearApproval(owner : Principal, tokenId : Nat) {
+        assert (_exists(tokenId) and _isOwner(owner, tokenId));
         switch (tokens.get(tokenId)) {
             case (?info) {
                 if (info.operator != null) {
@@ -233,17 +241,17 @@ shared(msg) actor class NFToken(
                     users.put(op, opInfo);
                     info.operator := null;
                     tokens.put(tokenId, info);
-                }
+                };
             };
             case _ {
-                assert(false);
+                assert (false);
             };
-        }
-    };  
+        };
+    };
 
-    private func _transfer(to: Principal, tokenId: Nat) {
-        assert(_exists(tokenId));
-        switch(tokens.get(tokenId)) {
+    private func _transfer(to : Principal, tokenId : Nat) {
+        assert (_exists(tokenId));
+        switch (tokens.get(tokenId)) {
             case (?info) {
                 _removeTokenFrom(info.owner, tokenId);
                 _addTokenTo(to, tokenId);
@@ -251,28 +259,28 @@ shared(msg) actor class NFToken(
                 tokens.put(tokenId, info);
             };
             case (_) {
-                assert(false);
+                assert (false);
             };
         };
     };
 
-    private func _burn(owner: Principal, tokenId: Nat) {
+    private func _burn(owner : Principal, tokenId : Nat) {
         _clearApproval(owner, tokenId);
         _transfer(blackhole, tokenId);
     };
 
-	public shared(msg) func setOwner(new: Principal): async Principal {
-		assert(msg.caller == owner_);
-		owner_ := new;
-		new
-	};
+    public shared (msg) func setOwner(new : Principal) : async Principal {
+        assert (msg.caller == owner_);
+        owner_ := new;
+        new;
+    };
 
     // public update calls
-    public shared(msg) func mint(to: Principal, metadata: ?TokenMetadata): async MintResult {
-        if(msg.caller != owner_) {
+    public shared (msg) func mint(to : Principal, metadata : ?TokenMetadata) : async MintResult {
+        if (msg.caller != owner_) {
             return #Err(#Unauthorized);
         };
-        let token: TokenInfo = {
+        let token : TokenInfo = {
             index = totalSupply_;
             var owner = to;
             var metadata = metadata;
@@ -286,13 +294,13 @@ shared(msg) actor class NFToken(
         return #Ok((token.index, txid));
     };
 
-    public shared(msg) func batchMint(to: Principal, arr: [?TokenMetadata]): async MintResult {
-        if(msg.caller != owner_) {
+    public shared (msg) func batchMint(to : Principal, arr : [?TokenMetadata]) : async MintResult {
+        if (msg.caller != owner_) {
             return #Err(#Unauthorized);
         };
         let startIndex = totalSupply_;
-        for(metadata in Iter.fromArray(arr)) {
-            let token: TokenInfo = {
+        for (metadata in Iter.fromArray(arr)) {
+            let token : TokenInfo = {
                 index = totalSupply_;
                 var owner = to;
                 var metadata = metadata;
@@ -307,11 +315,11 @@ shared(msg) actor class NFToken(
         return #Ok((startIndex, txs.size() - arr.size()));
     };
 
-    public shared(msg) func burn(tokenId: Nat): async TxReceipt {
-        if(_exists(tokenId) == false) {
-            return #Err(#TokenNotExist)
+    public shared (msg) func burn(tokenId : Nat) : async TxReceipt {
+        if (_exists(tokenId) == false) {
+            return #Err(#TokenNotExist);
         };
-        if(_isOwner(msg.caller, tokenId) == false) {
+        if (_isOwner(msg.caller, tokenId) == false) {
             return #Err(#Unauthorized);
         };
         _burn(msg.caller, tokenId); //not delete tokenId from tokens temporarily. (consider storage limited, it should be delete.)
@@ -319,13 +327,13 @@ shared(msg) actor class NFToken(
         return #Ok(txid);
     };
 
-    public shared(msg) func setTokenMetadata(tokenId: Nat, new_metadata: TokenMetadata) : async TxReceipt {
+    public shared (msg) func setTokenMetadata(tokenId : Nat, new_metadata : TokenMetadata) : async TxReceipt {
         // only canister owner can set
-        if(msg.caller != owner_) {
+        if (msg.caller != owner_) {
             return #Err(#Unauthorized);
         };
-        if(_exists(tokenId) == false) {
-            return #Err(#TokenNotExist)
+        if (_exists(tokenId) == false) {
+            return #Err(#TokenNotExist);
         };
         let token = _unwrap(tokens.get(tokenId));
         let old_metadate = token.metadata;
@@ -335,19 +343,17 @@ shared(msg) actor class NFToken(
         return #Ok(txid);
     };
 
-    public shared(msg) func approve(tokenId: Nat, operator: Principal) : async TxReceipt {
-        var owner: Principal = switch (_ownerOf(tokenId)) {
+    public shared (msg) func approve(tokenId : Nat, operator : Principal) : async TxReceipt {
+        var owner : Principal = switch (_ownerOf(tokenId)) {
             case (?own) {
                 own;
             };
             case (_) {
-                return #Err(#TokenNotExist)
-            }
+                return #Err(#TokenNotExist);
+            };
         };
-        if(Principal.equal(msg.caller, owner) == false)
-            if(_isApprovedForAll(owner, msg.caller) == false)
-                return #Err(#Unauthorized);
-        if(owner == operator) {
+        if (Principal.equal(msg.caller, owner) == false) if (_isApprovedForAll(owner, msg.caller) == false) return #Err(#Unauthorized);
+        if (owner == operator) {
             return #Err(#InvalidOperator);
         };
         switch (tokens.get(tokenId)) {
@@ -374,8 +380,8 @@ shared(msg) actor class NFToken(
         return #Ok(txid);
     };
 
-    public shared(msg) func setApprovalForAll(operator: Principal, value: Bool): async TxReceipt {
-        if(msg.caller == operator) {
+    public shared (msg) func setApprovalForAll(operator : Principal, value : Bool) : async TxReceipt {
+        if (msg.caller == operator) {
             return #Err(#Unauthorized);
         };
         var txid = 0;
@@ -396,31 +402,31 @@ shared(msg) actor class NFToken(
         } else {
             switch (users.get(msg.caller)) {
                 case (?user) {
-                    user.operators := TrieSet.delete(user.operators, operator, Principal.hash(operator), Principal.equal);    
+                    user.operators := TrieSet.delete(user.operators, operator, Principal.hash(operator), Principal.equal);
                     users.put(msg.caller, user);
                 };
-                case _ { };
+                case _ {};
             };
             switch (users.get(operator)) {
                 case (?user) {
-                    user.allowedBy := TrieSet.delete(user.allowedBy, msg.caller, Principal.hash(msg.caller), Principal.equal);    
+                    user.allowedBy := TrieSet.delete(user.allowedBy, msg.caller, Principal.hash(msg.caller), Principal.equal);
                     users.put(operator, user);
                 };
-                case _ { };
+                case _ {};
             };
             txid := addTxRecord(msg.caller, #revokeAll, null, #user(msg.caller), #user(operator), Time.now());
         };
         return #Ok(txid);
     };
 
-    public shared(msg) func transfer(to: Principal, tokenId: Nat): async TxReceipt {
-        var owner: Principal = switch (_ownerOf(tokenId)) {
+    public shared (msg) func transfer(to : Principal, tokenId : Nat) : async TxReceipt {
+        var owner : Principal = switch (_ownerOf(tokenId)) {
             case (?own) {
                 own;
             };
             case (_) {
-                return #Err(#TokenNotExist)
-            }
+                return #Err(#TokenNotExist);
+            };
         };
         if (owner != msg.caller) {
             return #Err(#Unauthorized);
@@ -431,11 +437,11 @@ shared(msg) actor class NFToken(
         return #Ok(txid);
     };
 
-    public shared(msg) func transferFrom(from: Principal, to: Principal, tokenId: Nat): async TxReceipt {
-        if(_exists(tokenId) == false) {
-            return #Err(#TokenNotExist)
+    public shared (msg) func transferFrom(from : Principal, to : Principal, tokenId : Nat) : async TxReceipt {
+        if (_exists(tokenId) == false) {
+            return #Err(#TokenNotExist);
         };
-        if(_isApprovedOrOwner(msg.caller, tokenId) == false) {
+        if (_isApprovedOrOwner(msg.caller, tokenId) == false) {
             return #Err(#Unauthorized);
         };
         _clearApproval(from, tokenId);
@@ -444,13 +450,13 @@ shared(msg) actor class NFToken(
         return #Ok(txid);
     };
 
-    public shared(msg) func batchTransferFrom(from: Principal, to: Principal, tokenIds: [Nat]): async TxReceipt {
-        var num: Nat = 0;
-        label l for(tokenId in Iter.fromArray(tokenIds)) {
-            if(_exists(tokenId) == false) {
+    public shared (msg) func batchTransferFrom(from : Principal, to : Principal, tokenIds : [Nat]) : async TxReceipt {
+        var num : Nat = 0;
+        label l for (tokenId in Iter.fromArray(tokenIds)) {
+            if (_exists(tokenId) == false) {
                 continue l;
             };
-            if(_isApprovedOrOwner(msg.caller, tokenId) == false) {
+            if (_isApprovedOrOwner(msg.caller, tokenId) == false) {
                 continue l;
             };
             _clearApproval(from, tokenId);
@@ -461,33 +467,33 @@ shared(msg) actor class NFToken(
         return #Ok(txs.size() - num);
     };
 
-    // public query function 
-    public query func logo(): async Text {
+    // public query function
+    public query func logo() : async Text {
         return logo_;
     };
 
-    public query func name(): async Text {
+    public query func name() : async Text {
         return name_;
     };
 
-    public query func symbol(): async Text {
+    public query func symbol() : async Text {
         return symbol_;
     };
 
-    public query func desc(): async Text {
+    public query func desc() : async Text {
         return desc_;
     };
 
-    public query func balanceOf(who: Principal): async Nat {
+    public query func balanceOf(who : Principal) : async Nat {
         return _balanceOf(who);
     };
 
-    public query func totalSupply(): async Nat {
+    public query func totalSupply() : async Nat {
         return totalSupply_;
     };
 
     // get metadata about this NFT collection
-    public query func getMetadata(): async Metadata {
+    public query func getMetadata() : async Metadata {
         {
             logo = logo_;
             name = name_;
@@ -496,14 +502,23 @@ shared(msg) actor class NFToken(
             totalSupply = totalSupply_;
             owner = owner_;
             cycles = Cycles.balance();
-        }
+        };
     };
 
-    public query func isApprovedForAll(owner: Principal, operator: Principal) : async Bool {
+    public shared ({ caller }) func setMetadata(nlogo : Text, nname : Text, nsymbol : Text, ndesc : Text) : async () {
+        assert (msg.caller == owner_);
+        logo_ := nlogo;
+        name_ := nname;
+        symbol_ := nsymbol;
+        desc_ := ndesc;
+
+    };
+
+    public query func isApprovedForAll(owner : Principal, operator : Principal) : async Bool {
         return _isApprovedForAll(owner, operator);
     };
 
-    public query func getOperator(tokenId: Nat) : async Result<Principal, Errors> {
+    public query func getOperator(tokenId : Nat) : async Result<Principal, Errors> {
         switch (_exists(tokenId)) {
             case true {
                 switch (_getApproved(tokenId)) {
@@ -513,15 +528,15 @@ shared(msg) actor class NFToken(
                     case (_) {
                         return #ok(Principal.fromText("aaaaa-aa"));
                     };
-                }   
+                };
             };
             case (_) {
                 return #err(#TokenNotExist);
             };
-        }
+        };
     };
 
-    public query func getUserInfo(who: Principal) : async Result<UserInfoExt, Errors> {
+    public query func getUserInfo(who : Principal) : async Result<UserInfoExt, Errors> {
         switch (users.get(who)) {
             case (?user) {
                 return #ok(_userInfotoExt(user));
@@ -529,27 +544,25 @@ shared(msg) actor class NFToken(
             case _ {
                 return #err(#Unauthorized);
             };
-        };        
+        };
     };
 
-    public query func getUserTokens(owner: Principal) : async [TokenInfoExt] {
+    public query func getUserTokens(owner : Principal) : async [TokenInfoExt] {
         let tokenIds = switch (users.get(owner)) {
             case (?user) {
-                TrieSet.toArray(user.tokens)
+                TrieSet.toArray(user.tokens);
             };
-            case _ {
-                []
-            };
+            case _ { [] };
         };
         let ret = Buffer.Buffer<TokenInfoExt>(tokenIds.size());
-    
-        for(id in Iter.fromArray(tokenIds)) {
+
+        for (id in Iter.fromArray(tokenIds)) {
             ret.add(_tokenInfotoExt(_unwrap(tokens.get(id))));
         };
-        return ret.toArray();
+        return Buffer.toArray(ret);
     };
 
-    public query func ownerOf(tokenId: Nat): async Result<Principal, Errors> {
+    public query func ownerOf(tokenId : Nat) : async Result<Principal, Errors> {
         switch (_ownerOf(tokenId)) {
             case (?owner) {
                 return #ok(owner);
@@ -557,15 +570,15 @@ shared(msg) actor class NFToken(
             case _ {
                 return #err(#TokenNotExist);
             };
-        }
+        };
     };
 
-    public query func getTokenInfo(tokenId: Nat) : async Result<TokenInfoExt, Errors> {
-        switch(tokens.get(tokenId)){
-            case(?tokeninfo) {
+    public query func getTokenInfo(tokenId : Nat) : async Result<TokenInfoExt, Errors> {
+        switch (tokens.get(tokenId)) {
+            case (?tokeninfo) {
                 return #ok(_tokenInfotoExt(tokeninfo));
             };
-            case(_) {
+            case (_) {
                 return #err(#TokenNotExist);
             };
         };
@@ -573,30 +586,30 @@ shared(msg) actor class NFToken(
 
     // Optional
     public query func getAllTokens() : async [TokenInfoExt] {
-        Iter.toArray(Iter.map(tokens.entries(), func (i: (Nat, TokenInfo)): TokenInfoExt {_tokenInfotoExt(i.1)}))
+        Iter.toArray(Iter.map(tokens.entries(), func(i : (Nat, TokenInfo)) : TokenInfoExt { _tokenInfotoExt(i.1) }));
     };
 
     // transaction history related
-    public query func historySize(): async Nat {
+    public query func historySize() : async Nat {
         return txs.size();
     };
 
-    public query func getTransaction(index: Nat): async TxRecord {
+    public query func getTransaction(index : Nat) : async TxRecord {
         return txs[index];
     };
 
-    public query func getTransactions(start: Nat, limit: Nat): async [TxRecord] {
+    public query func getTransactions(start : Nat, limit : Nat) : async [TxRecord] {
         let res = Buffer.Buffer<TxRecord>(limit);
         var i = start;
         while (i < start + limit and i < txs.size()) {
             res.add(txs[i]);
             i += 1;
         };
-        return res.toArray();
+        return Buffer.toArray(res);
     };
 
-    public query func getUserTransactionAmount(user: Principal): async Nat {
-        var res: Nat = 0;
+    public query func getUserTransactionAmount(user : Principal) : async Nat {
+        var res : Nat = 0;
         for (i in txs.vals()) {
             if (i.caller == user or i.from == #user(user) or i.to == #user(user)) {
                 res += 1;
@@ -605,23 +618,23 @@ shared(msg) actor class NFToken(
         return res;
     };
 
-    public query func getUserTransactions(user: Principal, start: Nat, limit: Nat): async [TxRecord] {
+    public query func getUserTransactions(user : Principal, start : Nat, limit : Nat) : async [TxRecord] {
         let res = Buffer.Buffer<TxRecord>(limit);
         var idx = 0;
         label l for (i in txs.vals()) {
             if (i.caller == user or i.from == #user(user) or i.to == #user(user)) {
-                if(idx < start) {
+                if (idx < start) {
                     idx += 1;
                     continue l;
                 };
-                if(idx >= start + limit) {
+                if (idx >= start + limit) {
                     break l;
                 };
                 res.add(i);
                 idx += 1;
             };
         };
-        return res.toArray();
+        return Buffer.toArray(res);
     };
 
     // upgrade functions
@@ -639,5 +652,34 @@ shared(msg) actor class NFToken(
         usersEntries := [];
         tokensEntries := [];
     };
-};
 
+    /////////////////////////
+    //http request
+    /////////////////////////
+    let _HttpHandler = Http.HttpHandler();
+
+    public query func http_request(request : HttpTypes.Request) : async HttpTypes.Response {
+        if (Text.contains(request.url, #text("tokenid"))) {
+            let tokenId = Iter.toArray(Text.tokens(request.url, #text("tokenid=")))[1];
+            switch (Nat.fromText(tokenId)) {
+                case (?nid) {
+                    switch (tokens.get(nid-1)) {
+                        case (?tokenInfo) {
+                            _HttpHandler.renderToken(tokenInfo);
+                        };
+                        case (_) {
+                            _HttpHandler.renderMesssage("no token found");
+                        };
+                    };
+                };
+                case (_) {
+                    _HttpHandler.renderMesssage("no token found");
+                };
+            };
+
+        } else {
+            _HttpHandler.request(request);
+        };
+
+    };
+};

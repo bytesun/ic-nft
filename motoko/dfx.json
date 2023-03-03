@@ -3,10 +3,6 @@
     "nft": {
       "main": "src/main.mo",
       "type": "motoko"
-    },
-	"sale": {
-      "main": "src/sale.mo",
-      "type": "motoko"
     }
   },
   "defaults": {
@@ -14,6 +10,7 @@
       "packtool": ""
     }
   },
+  "dfx": "0.13.1",
   "networks": {
     "local": {
       "bind": "127.0.0.1:8000",
