@@ -22,6 +22,8 @@ import Text "mo:base/Text";
 import Time "mo:base/Time";
 import TrieSet "mo:base/TrieSet";
 
+import Util "./util/Util";
+
 import Types "./types";
 import Http "./http";
 import HttpTypes "./http/types";
@@ -38,6 +40,8 @@ shared (msg) actor class NFToken(
     type Location = Types.Location;
     type Attribute = Types.Attribute;
     type TokenMetadata = Types.TokenMetadata;
+    type TokenIndex = Types.TokenIndex;
+    type TokenIdentifier = Types.TokenIdentifier;
     type Record = Types.Record;
     type TxRecord = Types.TxRecord;
     type Operation = Types.Operation;
@@ -69,6 +73,7 @@ shared (msg) actor class NFToken(
     private stable var symbol_ : Text = _symbol;
     private stable var desc_ : Text = _desc;
     private stable var owner_ : Principal = _owner;
+    private stable var asset_canister = "h7ecw-giaaa-aaaal-ab75a-cai";
     private stable var totalSupply_ : Nat = 0;
     private stable var blackhole : Principal = Principal.fromText("aaaaa-aa");
 
@@ -78,6 +83,10 @@ shared (msg) actor class NFToken(
     private var users = HashMap.HashMap<Principal, UserInfo>(1, Principal.equal, Principal.hash);
     private stable var txs : [TxRecord] = [];
     private stable var txIndex : Nat = 0;
+
+    private stable var minters : [Principal] = [];
+    private stable var airdropList : [Principal] = [];
+    private stable var whiteList : [Principal] = [];
 
     private func addTxRecord(
         caller : Principal,
@@ -269,15 +278,53 @@ shared (msg) actor class NFToken(
         _transfer(blackhole, tokenId);
     };
 
+    private func _isMinter(vm : Principal) : Bool {
+        let fm = Array.find(
+            minters,
+            func(minter : Principal) : Bool {
+                minter == vm;
+            },
+        );
+        switch (fm) {
+            case (?fm) {
+                true;
+            };
+            case (_) {
+                false;
+            };
+        };
+    };
+
     public shared (msg) func setOwner(new : Principal) : async Principal {
         assert (msg.caller == owner_);
         owner_ := new;
         new;
     };
 
+    public shared ({ caller }) func addMinter(newMinter : Text) : async () {
+        assert (caller == owner_);
+        let fm = Array.find(
+            minters,
+            func(minter : Principal) : Bool {
+                minter == Principal.fromText(newMinter);
+            },
+        );
+        switch (fm) {
+            case (?fm) {
+                //
+            };
+            case (_) {
+                let bm = Buffer.fromArray<Principal>(minters);
+                bm.add(Principal.fromText(newMinter));
+                minters := Buffer.toArray(bm);
+            };
+        };
+
+    };
+
     // public update calls
     public shared (msg) func mint(to : Principal, metadata : ?TokenMetadata) : async MintResult {
-        if (msg.caller != owner_) {
+        if (msg.caller != owner_ and _isMinter(msg.caller) == false) {
             return #Err(#Unauthorized);
         };
         let token : TokenInfo = {
@@ -292,6 +339,67 @@ shared (msg) actor class NFToken(
         totalSupply_ += 1;
         let txid = addTxRecord(msg.caller, #mint(metadata), ?token.index, #user(blackhole), #user(to), Time.now());
         return #Ok((token.index, txid));
+    };
+
+    public shared ({ caller }) func claim() : async Result.Result<Nat, Text> {
+        if (Principal.isAnonymous(caller)) {
+            #err("No authenticated");
+        } else {
+            //check list
+            let fl = Array.find(
+                airdropList,
+                func(p : Principal) : Bool {
+                    p == caller;
+                },
+            );
+            // let fl = ?"test";
+            switch (fl) {
+                case (?fl) {
+                    //check unclaimed tokens
+                    let alltokens = Iter.toArray(tokens.vals());
+                    let fuc = Array.find(
+                        alltokens,
+                        func(token : TokenInfo) : Bool {
+                            token.owner == Principal.fromActor(this);
+                        },
+                    );
+                    switch (fuc) {
+                        case (?fuc) {
+                            _transfer(caller, fuc.index);
+                            let txid = addTxRecord(caller, #transfer, ?fuc.index, #user(Principal.fromActor(this)), #user(caller), Time.now());
+
+                            //remove from airdrop list
+                            airdropList := Array.filter(
+                                airdropList,
+                                func(p : Principal) : Bool {
+                                    p != caller;
+                                },
+                            );
+                            #ok(fuc.index);
+                        };
+                        case (_) {
+                            #err("no token can be claimed");
+                        };
+                    };
+                };
+                case (_) {
+                    #err("you are not eligible to claim ");
+                };
+            };
+
+        };
+    };
+
+    public shared ({ caller }) func drop(to : Principal, arrindex : [Nat]) : async Result.Result<Nat, Text> {
+        if (msg.caller != owner_ and _isMinter(msg.caller) == false) {
+            #err("no permission");
+
+        } else {
+            for (t in arrindex.vals()) {
+                _transfer(to, t);
+            };
+            #ok(arrindex.size());
+        };
     };
 
     public shared (msg) func batchMint(to : Principal, arr : [?TokenMetadata]) : async MintResult {
@@ -313,6 +421,30 @@ shared (msg) actor class NFToken(
             ignore addTxRecord(msg.caller, #mint(metadata), ?token.index, #user(blackhole), #user(to), Time.now());
         };
         return #Ok((startIndex, txs.size() - arr.size()));
+    };
+
+    public shared ({ caller }) func mintAll() : async () {
+        assert (caller == owner_);
+        let to = Principal.fromActor(this);
+        for (j in Iter.range(0, 999)) {
+
+            let md = {
+                filetype = "jpg";
+                location = #Web("https://tqlae-kiaaa-aaaal-acamq-cai.raw.ic0.app/assets/" # Nat.toText(j +1) # ".jpg");
+                attributes = [];
+            };
+            let token : TokenInfo = {
+                index = totalSupply_;
+                var owner = to;
+                var metadata = ?md;
+                var operator = null;
+                timestamp = Time.now();
+            };
+            tokens.put(totalSupply_, token);
+            _addTokenTo(to, totalSupply_);
+            totalSupply_ += 1;
+            ignore addTxRecord(msg.caller, #mint(?md), ?token.index, #user(blackhole), #user(to), Time.now());
+        };
     };
 
     public shared (msg) func burn(tokenId : Nat) : async TxReceipt {
@@ -661,16 +793,11 @@ shared (msg) actor class NFToken(
     public query func http_request(request : HttpTypes.Request) : async HttpTypes.Response {
         if (Text.contains(request.url, #text("tokenid"))) {
             let tokenId = Iter.toArray(Text.tokens(request.url, #text("tokenid=")))[1];
-            switch (Nat.fromText(tokenId)) {
-                case (?nid) {
-                    switch (tokens.get(nid-1)) {
-                        case (?tokenInfo) {
-                            _HttpHandler.renderToken(tokenInfo);
-                        };
-                        case (_) {
-                            _HttpHandler.renderMesssage("no token found");
-                        };
-                    };
+            let nid = Util.textToNat(tokenId);
+
+            switch (tokens.get(nid -1)) {
+                case (?tokenInfo) {
+                    _HttpHandler.renderToken(tokenInfo);
                 };
                 case (_) {
                     _HttpHandler.renderMesssage("no token found");
@@ -678,7 +805,8 @@ shared (msg) actor class NFToken(
             };
 
         } else {
-            _HttpHandler.request(request);
+            let indexInfo = "Collection Name: <b>" # name_ # "</b><br/>" # "Symbol: " # symbol_ # "<br/>" # "Description: " # desc_ # "<br/>" # "Creator: " # " <a href='https://twitter.com/Guywithipad' target='_blank'> @Guywithipad </a>" # "<br/>" # "Total Supply: " # Nat.toText(totalSupply_) # "<br/>" # "";
+            _HttpHandler.httpIndex(indexInfo);
         };
 
     };

@@ -52,12 +52,12 @@ module {
 
         // @path: *?tokenid
 
-        public func httpIndex(request : Types.Request) : Types.Response {
+        public func httpIndex(message : Text) : Types.Response {
                 return {
                     status_code = 200;
-                    headers = [("content-type", "text/plain")];
+                    headers = [("content-type", "text/html")];
                     body = Text.encodeUtf8 (
-                        "ICEvent NFTicket" # "\n" 
+                       message
                     );
                     streaming_strategy = null;
                 };
@@ -81,7 +81,7 @@ module {
 
                         };
                         case(#Web url){
-                            message := "<img src="# url #"/>";
+                            message := "<img src='"# url #"' />";
                         };
                     };
                     
@@ -156,27 +156,27 @@ module {
 
 
 
-        public func request(request : Types.Request) : Types.Response {
+        // public func request(request : Types.Request) : Types.Response {
             
 
-            // if (Text.contains(request.url, #text("tokenid"))) {
-            //     let tokenId = Iter.toArray(Text.tokens(request.url, #text("tokenid=")))[1];
-            //     let tokenind = ExtCore.TokenIdentifier.getIndex(tokenId);
-            //     return renderTicket("text/plain", Text.encodeUtf8 ("ICEvent NFTicket" # "\n"  ));
-            // }else{
-                return httpIndex(request);
-            // }
+        //     // if (Text.contains(request.url, #text("tokenid"))) {
+        //     //     let tokenId = Iter.toArray(Text.tokens(request.url, #text("tokenid=")))[1];
+        //     //     let tokenind = ExtCore.TokenIdentifier.getIndex(tokenId);
+        //     //     return renderTicket("text/plain", Text.encodeUtf8 ("ICEvent NFTicket" # "\n"  ));
+        //     // }else{
+        //         return httpIndex(request);
+        //     // }
 
             
 
-            // Paths
+        //     // Paths
 
-            //let path = Iter.toArray(Text.tokens(request.url, #text("/")));
+        //     //let path = Iter.toArray(Text.tokens(request.url, #text("/")));
 
 
-            // 404
+        //     // 404
 
             
-        };
+        // };
     };
 };
