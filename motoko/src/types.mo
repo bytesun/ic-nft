@@ -260,4 +260,20 @@ module {
             return AID.hash(_x);
         };
     };
+
+   public type Order = {
+        buyer: Principal;
+        item: Text;
+        count: Nat64;
+        price: Nat64;
+        subaccount: Text;
+        amount: Nat64;
+        ordertime: Int;
+        status:{
+            #new;
+            #paid;
+            #delivered;
+            #canceled;
+        }
+    }
 };

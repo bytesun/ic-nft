@@ -21,12 +21,20 @@ import Result "mo:base/Result";
 import Text "mo:base/Text";
 import Time "mo:base/Time";
 import TrieSet "mo:base/TrieSet";
+import Blob "mo:base/Blob";
+import Nat64 "mo:base/Nat64";
 
 import Util "./util/Util";
+import LedgerUtils "./ledgerUtils/utils";
+import Account "./ledgerUtils/account";
+import Hex "./ledgerUtils/hex";
 
 import Types "./types";
 import Http "./http";
 import HttpTypes "./http/types";
+import AccountIdentifier "util/AccountIdentifier";
+
+import LedgerTypes "./ledgerTypes";
 
 shared (msg) actor class NFToken(
     _logo : Text,
@@ -49,6 +57,7 @@ shared (msg) actor class NFToken(
     type TokenInfoExt = Types.TokenInfoExt;
     type UserInfo = Types.UserInfo;
     type UserInfoExt = Types.UserInfoExt;
+    type Order = Types.Order;
 
     public type Errors = {
         #Unauthorized;
@@ -66,6 +75,11 @@ shared (msg) actor class NFToken(
         #Err : Errors;
     };
 
+    public type ClaimResult = {
+        #Ok : [TokenInfoExt];
+        #Err : Text;
+    };
+
     public type Result<Ok, Err> = { #ok : Ok; #err : Err };
 
     private stable var logo_ : Text = _logo; // base64 encoded image
@@ -79,6 +93,7 @@ shared (msg) actor class NFToken(
 
     private stable var tokensEntries : [(Nat, TokenInfo)] = [];
     private stable var usersEntries : [(Principal, UserInfo)] = [];
+
     private var tokens = HashMap.HashMap<Nat, TokenInfo>(1, Nat.equal, Hash.hash);
     private var users = HashMap.HashMap<Principal, UserInfo>(1, Principal.equal, Principal.hash);
     private stable var txs : [TxRecord] = [];
@@ -86,7 +101,15 @@ shared (msg) actor class NFToken(
 
     private stable var minters : [Principal] = [];
     private stable var airdropList : [Principal] = [];
-    private stable var whiteList : [Principal] = [];
+    private stable var whiteList : [Text] = []; //account id
+    private stable var nextSubaccount : Nat = 2;
+    private var orders = HashMap.HashMap<Principal, Order>(1, Principal.equal, Principal.hash);
+    private stable var stableOrders : [(Principal, Order)] = [];
+    private stable var salePrice : Nat64 = 4_000_000;
+
+    let FEE : Nat64 = 10_000;
+    let E8S : Nat64 = 10_000_000;
+    let ICPLedger : LedgerTypes.Ledger = actor ("ryjl3-tyaaa-aaaaa-aaaba-cai");
 
     private func addTxRecord(
         caller : Principal,
@@ -321,6 +344,186 @@ shared (msg) actor class NFToken(
         };
 
     };
+    public shared ({ caller }) func addWhiteList(acc : Text) : async () {
+        assert (caller == owner_);
+        let fm = Array.find(
+            whiteList,
+            func(account : Text) : Bool {
+                acc == account;
+            },
+        );
+        switch (fm) {
+            case (?fm) {
+                //
+            };
+            case (_) {
+                let bm = Buffer.fromArray<Text>(whiteList);
+                bm.add(acc);
+                whiteList := Buffer.toArray(bm);
+            };
+        };
+
+    };
+
+    public shared ({ caller }) func createOrder(
+        item : Text,
+        count : Nat64,
+    ) : async Result.Result<Nat, Text> {
+        if (Principal.isAnonymous(caller)) return #err("no authenticated");
+        let rsub = nextSubaccount;
+        nextSubaccount := nextSubaccount +1;
+        orders.put(
+            caller,
+            {
+                buyer = caller;
+                item = item;
+                count = count;
+                price = salePrice;
+                subaccount = Account.getAccountTextId(Principal.fromActor(this), rsub);
+                amount = salePrice * count;
+                ordertime = Time.now();
+                status = #new;
+            },
+        );
+        #ok(rsub);
+    };
+
+    public query func getSalePrice(): async Nat64{
+        return salePrice;
+    };
+
+    public shared({caller}) func setSalePrice(price: Nat64): async (){
+        assert(caller == owner_);
+        salePrice := price;
+    };
+
+    public query ({ caller }) func getOrder() : async ?Order {
+        orders.get(caller);
+    };
+
+    public shared ({ caller }) func payOrder() : async Result.Result<Nat64, Text> {
+        if (Principal.isAnonymous(caller)) return #err("no authenticated");
+        let order = orders.get(caller);
+        switch (order) {
+            case (?order) {
+
+                let callaccount = Account.getDefaultAccountText(caller);
+                let bicp = await ICPLedger.account_balance({
+                    account = LedgerUtils.hexToAccountId(callaccount);
+                });
+
+                if (bicp.e8s > order.amount + FEE) {
+          
+                    let res = await ICPLedger.transfer({
+                        memo = 0;
+                        from_subaccount = null;
+                        to = Blob.fromArray(Hex.decode(order.subaccount));
+                        amount = { e8s = order.amount };
+                        fee = { e8s = FEE };
+                        created_at_time = ?{
+                            timestamp_nanos = Nat64.fromNat(Int.abs(Time.now()));
+                        };
+                    });
+                    switch (res) {
+                        case (#Ok(blockIndex)) {
+                            #ok(blockIndex);
+                        };
+                        case (#Err(#InsufficientFunds { balance })) {
+                            throw Error.reject("No enough fund! The balance is only " # debug_show balance # " e8s");
+                        };
+                        case (#Err(other)) {
+                            throw Error.reject("Unexpected error: " # debug_show other);
+                        };
+                    };
+                } else {
+                    #err("you have no enough fund to pay the order");
+                };
+
+            };
+            case (_) {
+                #err("you don't have order yet!");
+            };
+        };
+    };
+
+    public shared ({ caller }) func claimPaidNFT() : async ClaimResult {
+        let order = orders.get(caller);
+        switch (order) {
+            case (?order) {
+                //check order status
+                switch (order.status) {
+                    case (#new) {
+                        #Err("you haven't pay yet");
+                    };
+                    case (#paid) {
+    
+                        let bicp = await ICPLedger.account_balance({
+                            account = LedgerUtils.hexToAccountId(order.subaccount);
+                        });
+                        if (bicp.e8s > order.amount) {
+                           
+                            //save transfered tokens for return
+                            let tb = Buffer.Buffer<TokenInfoExt>(0);
+                            //pick x NFTs base on order and transfer to buyer
+                            for (j in Iter.range(0, Nat64.toNat(order.count-1))) {
+
+                                let alltokens = Iter.toArray(tokens.vals());
+                                let fuc = Array.find(
+                                    alltokens,
+                                    func(token : TokenInfo) : Bool {
+                                        token.owner == Principal.fromActor(this);
+                                    },
+                                );
+                                switch (fuc) {
+                                    case (?fuc) {
+                                        _transfer(caller, fuc.index);
+                                        let txid = addTxRecord(caller, #transfer, ?fuc.index, #user(Principal.fromActor(this)), #user(caller), Time.now());
+                                        tb.add(_tokenInfotoExt(fuc));
+                                    };
+                                    case (_) {
+                                        // #Err("no token can be claimed");
+                                    };
+                                };
+                            };
+                            //change order status
+                            let tarr = Buffer.toArray(tb);
+                            if (tarr.size() > 0) {
+                                orders.put(
+                                    caller,
+                                    {
+                                        buyer = order.buyer;
+                                        item = order.item;
+                                        count = order.count;
+                                        price = order.price;
+                                        subaccount = order.subaccount;
+                                        amount = order.amount;
+                                        ordertime = order.ordertime;
+                                        status = #delivered;
+                                    },
+                                );
+                                #Ok(tarr);
+                            }else{
+                                #Err("no enought token to claim")
+                            }
+
+                        } else {
+                            #Err("no payment is made");
+                        };
+                    };
+                    case (#delivered) {
+                        #Err("you already claimed it");
+                    };
+                    case (#canceled) {
+                        #Err("the order has been canceled");
+                    };
+                };
+
+            };
+            case (_) {
+                #Err("you have no order yet, please order first.");
+            };
+        };
+    };
 
     // public update calls
     public shared (msg) func mint(to : Principal, metadata : ?TokenMetadata) : async MintResult {
@@ -341,15 +544,30 @@ shared (msg) actor class NFToken(
         return #Ok((token.index, txid));
     };
 
-    public shared ({ caller }) func claim() : async Result.Result<Nat, Text> {
+    public query ({ caller }) func checkEligible() : async Bool {
+        let fl = Array.find(
+            whiteList,
+            func(p : Text) : Bool {
+                p == AccountIdentifier.fromPrincipal(caller, null);
+            },
+        );
+        // let fl = ?"test";
+        switch (fl) {
+            case (?fl) {
+                true;
+            };
+            case (_) { false };
+        };
+    };
+    public shared ({ caller }) func claim() : async ClaimResult {
         if (Principal.isAnonymous(caller)) {
-            #err("No authenticated");
+            #Err("No authenticated");
         } else {
             //check list
             let fl = Array.find(
-                airdropList,
-                func(p : Principal) : Bool {
-                    p == caller;
+                whiteList,
+                func(p : Text) : Bool {
+                    p == AccountIdentifier.fromPrincipal(caller, null);
                 },
             );
             // let fl = ?"test";
@@ -368,22 +586,22 @@ shared (msg) actor class NFToken(
                             _transfer(caller, fuc.index);
                             let txid = addTxRecord(caller, #transfer, ?fuc.index, #user(Principal.fromActor(this)), #user(caller), Time.now());
 
-                            //remove from airdrop list
-                            airdropList := Array.filter(
-                                airdropList,
-                                func(p : Principal) : Bool {
-                                    p != caller;
+                            //remove from whitelist
+                            whiteList := Array.filter(
+                                whiteList,
+                                func(p : Text) : Bool {
+                                    p != AccountIdentifier.fromPrincipal(caller, null);
                                 },
                             );
-                            #ok(fuc.index);
+                            #Ok([_tokenInfotoExt(fuc)]);
                         };
                         case (_) {
-                            #err("no token can be claimed");
+                            #Err("no token can be claimed");
                         };
                     };
                 };
                 case (_) {
-                    #err("you are not eligible to claim ");
+                    #Err("you are not eligible to claim or you already claimed before");
                 };
             };
 
@@ -773,6 +991,7 @@ shared (msg) actor class NFToken(
     system func preupgrade() {
         usersEntries := Iter.toArray(users.entries());
         tokensEntries := Iter.toArray(tokens.entries());
+        stableOrders := Iter.toArray(orders.entries());
     };
 
     system func postupgrade() {
@@ -781,6 +1000,7 @@ shared (msg) actor class NFToken(
 
         users := HashMap.fromIter<Principal, UserInfo>(usersEntries.vals(), 1, Principal.equal, Principal.hash);
         tokens := HashMap.fromIter<Nat, TokenInfo>(tokensEntries.vals(), 1, Nat.equal, Hash.hash);
+        orders := HashMap.fromIter<Principal, Order>(stableOrders.vals(), 1, Principal.equal, Principal.hash);
         usersEntries := [];
         tokensEntries := [];
     };
