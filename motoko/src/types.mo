@@ -267,6 +267,7 @@ module {
         count: Nat64;
         price: Nat64;
         subaccount: Text;
+        subaccountIndex:Nat;
         amount: Nat64;
         ordertime: Int;
         status:{

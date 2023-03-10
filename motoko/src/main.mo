@@ -365,6 +365,9 @@ shared (msg) actor class NFToken(
 
     };
 
+    public query func getWL(): async [Text]{
+            whiteList
+    };
     public shared ({ caller }) func createOrder(
         item : Text,
         count : Nat64,
@@ -380,6 +383,7 @@ shared (msg) actor class NFToken(
                 count = count;
                 price = salePrice;
                 subaccount = Account.getAccountTextId(Principal.fromActor(this), rsub);
+                subaccountIndex = rsub;
                 amount = salePrice * count;
                 ordertime = Time.now();
                 status = #new;
@@ -388,12 +392,12 @@ shared (msg) actor class NFToken(
         #ok(rsub);
     };
 
-    public query func getSalePrice(): async Nat64{
+    public query func getSalePrice() : async Nat64 {
         return salePrice;
     };
 
-    public shared({caller}) func setSalePrice(price: Nat64): async (){
-        assert(caller == owner_);
+    public shared ({ caller }) func setSalePrice(price : Nat64) : async () {
+        assert (caller == owner_);
         salePrice := price;
     };
 
@@ -407,36 +411,114 @@ shared (msg) actor class NFToken(
         switch (order) {
             case (?order) {
 
-                let callaccount = Account.getDefaultAccountText(caller);
                 let bicp = await ICPLedger.account_balance({
-                    account = LedgerUtils.hexToAccountId(callaccount);
+                    account = LedgerUtils.hexToAccountId(order.subaccount);
                 });
 
                 if (bicp.e8s > order.amount + FEE) {
-          
-                    let res = await ICPLedger.transfer({
-                        memo = 0;
-                        from_subaccount = null;
-                        to = Blob.fromArray(Hex.decode(order.subaccount));
-                        amount = { e8s = order.amount };
-                        fee = { e8s = FEE };
-                        created_at_time = ?{
-                            timestamp_nanos = Nat64.fromNat(Int.abs(Time.now()));
-                        };
-                    });
-                    switch (res) {
-                        case (#Ok(blockIndex)) {
-                            #ok(blockIndex);
-                        };
-                        case (#Err(#InsufficientFunds { balance })) {
-                            throw Error.reject("No enough fund! The balance is only " # debug_show balance # " e8s");
-                        };
-                        case (#Err(other)) {
-                            throw Error.reject("Unexpected error: " # debug_show other);
-                        };
-                    };
+                    orders.put(
+                        caller,
+                        {
+                            buyer = order.buyer;
+                            item = order.item;
+                            count = order.count;
+                            price = order.price;
+                            subaccount = order.subaccount;
+                            subaccountIndex = order.subaccountIndex;
+                            amount = order.amount;
+                            ordertime = order.ordertime;
+                            status = #paid;
+                        },
+                    );
+                    #ok(1);
+                    // let res = await ICPLedger.transfer({
+                    //     memo = 0;
+                    //     from_subaccount = null;
+                    //     to = Blob.fromArray(Hex.decode(order.subaccount));
+                    //     amount = { e8s = order.amount };
+                    //     fee = { e8s = FEE };
+                    //     created_at_time = ?{
+                    //         timestamp_nanos = Nat64.fromNat(Int.abs(Time.now()));
+                    //     };
+                    // });
+                    // switch (res) {
+                    //     case (#Ok(blockIndex)) {
+                    //         #ok(blockIndex);
+                    //     };
+                    //     case (#Err(#InsufficientFunds { balance })) {
+                    //         throw Error.reject("No enough fund! The balance is only " # debug_show balance # " e8s");
+                    //     };
+                    //     case (#Err(other)) {
+                    //         throw Error.reject("Unexpected error: " # debug_show other);
+                    //     };
+                    // };
                 } else {
-                    #err("you have no enough fund to pay the order");
+                    #err("you haven't pay the order yet.");
+                };
+
+            };
+            case (_) {
+                #err("you don't have order yet!");
+            };
+        };
+    };
+
+    public shared ({ caller }) func cancelOrder() : async Result.Result<Nat, Text> {
+        if (Principal.isAnonymous(caller)) return #err("no authenticated");
+        let order = orders.get(caller);
+        switch (order) {
+            case (?order) {
+
+                //check order status
+                if (order.status == #delivered) {
+                    #err("you already minted, so can't canceled");
+                } else {
+                    let bicp = await ICPLedger.account_balance({
+                        account = LedgerUtils.hexToAccountId(order.subaccount);
+                    });
+                    //enough to refund
+                    if (bicp.e8s > FEE) {
+                        orders.put(
+                            caller,
+                            {
+                                buyer = order.buyer;
+                                item = order.item;
+                                count = order.count;
+                                price = order.price;
+                                subaccount = order.subaccount;
+                                subaccountIndex = order.subaccountIndex;
+                                amount = order.amount;
+                                ordertime = order.ordertime;
+                                status = #canceled;
+                            },
+                        );
+
+                        let res = await ICPLedger.transfer({
+                            memo = 0;
+                            from_subaccount = ?LedgerUtils.subToSubBlob(order.subaccountIndex);
+                            to = Blob.fromArray(Hex.decode(AccountIdentifier.fromPrincipal(order.buyer, null)));
+                            amount = { e8s = bicp.e8s -FEE };
+                            fee = { e8s = FEE };
+                            created_at_time = ?{
+                                timestamp_nanos = Nat64.fromNat(Int.abs(Time.now()));
+                            };
+                        });
+                        switch (res) {
+                            case (#Ok(blockIndex)) {
+                                #ok(1);
+                            };
+                            case (#Err(#InsufficientFunds { balance })) {
+                                #err("No enough fund! The balance is only " # debug_show balance # " e8s");
+                            };
+                            case (#Err(other)) {
+                                #err("Unexpected error: " # debug_show other);
+                            };
+                        };
+
+                    } else {
+                        #err("you haven't pay the order yet.");
+                    };
+
                 };
 
             };
@@ -448,6 +530,7 @@ shared (msg) actor class NFToken(
 
     public shared ({ caller }) func claimPaidNFT() : async ClaimResult {
         let order = orders.get(caller);
+        var errMsg = "";
         switch (order) {
             case (?order) {
                 //check order status
@@ -456,16 +539,16 @@ shared (msg) actor class NFToken(
                         #Err("you haven't pay yet");
                     };
                     case (#paid) {
-    
+
                         let bicp = await ICPLedger.account_balance({
                             account = LedgerUtils.hexToAccountId(order.subaccount);
                         });
                         if (bicp.e8s > order.amount) {
-                           
+
                             //save transfered tokens for return
                             let tb = Buffer.Buffer<TokenInfoExt>(0);
                             //pick x NFTs base on order and transfer to buyer
-                            for (j in Iter.range(0, Nat64.toNat(order.count-1))) {
+                            for (j in Iter.range(0, Nat64.toNat(order.count -1))) {
 
                                 let alltokens = Iter.toArray(tokens.vals());
                                 let fuc = Array.find(
@@ -479,6 +562,29 @@ shared (msg) actor class NFToken(
                                         _transfer(caller, fuc.index);
                                         let txid = addTxRecord(caller, #transfer, ?fuc.index, #user(Principal.fromActor(this)), #user(caller), Time.now());
                                         tb.add(_tokenInfotoExt(fuc));
+
+                                        //release fund to treasury
+                                        let res = await ICPLedger.transfer({
+                                            memo = 0;
+                                            from_subaccount = ?LedgerUtils.subToSubBlob(order.subaccountIndex);
+                                            to = Blob.fromArray(Hex.decode(Account.getDefaultAccountText(Principal.fromActor(this))));
+                                            amount = { e8s = order.amount - FEE };
+                                            fee = { e8s = FEE };
+                                            created_at_time = ?{
+                                                timestamp_nanos = Nat64.fromNat(Int.abs(Time.now()));
+                                            };
+                                        });
+                                        switch (res) {
+                                            case (#Ok(blockIndex)) {
+                                                
+                                            };
+                                            case (#Err(#InsufficientFunds { balance })) {
+                                                errMsg := errMsg # ", No enough fund! The balance is only " # debug_show balance # " e8s";
+                                            };
+                                            case (#Err(other)) {
+                                                errMsg := errMsg # ", Unexpected error: " # debug_show other;
+                                            };
+                                        };
                                     };
                                     case (_) {
                                         // #Err("no token can be claimed");
@@ -496,15 +602,16 @@ shared (msg) actor class NFToken(
                                         count = order.count;
                                         price = order.price;
                                         subaccount = order.subaccount;
+                                        subaccountIndex = order.subaccountIndex;
                                         amount = order.amount;
                                         ordertime = order.ordertime;
                                         status = #delivered;
                                     },
                                 );
                                 #Ok(tarr);
-                            }else{
-                                #Err("no enought token to claim")
-                            }
+                            } else {
+                                #Err(errMsg # ", no enought token to claim");
+                            };
 
                         } else {
                             #Err("no payment is made");
